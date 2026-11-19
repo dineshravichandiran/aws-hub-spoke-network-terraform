@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars (git-ignored) to override defaults.
+region                     = "ap-south-1"
+single_nat_gateway         = true
+enable_interface_endpoints = false
+# allowed_flows            = []   # isolate the spokes from each other

@@ -1,0 +1,78 @@
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "**.tf"
+      - "**.tftest.hcl"
+      - ".tflint.hcl"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.12.2"
+  CHECKOV_VERSION: "3.4.3"
+
+# This repository is a lab that is applied by hand and destroyed the same day, with local state.
+# The pipeline therefore runs only the checks that need no AWS account. The plan-and-apply
+# pipeline with OIDC is in the sibling repository aws-sre-platform-terraform.
+jobs:
+  static:
+    name: format, validate, lint, test, scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform fmt -check -recursive
+
+      - name: Validate every module and the lab
+        run: |
+          for dir in modules/* envs/lab; do
+            echo "::group::validate $dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - name: Tests (mocked provider, no credentials)
+        run: |
+          for dir in modules/* envs/lab; do
+            echo "::group::test $dir"
+            terraform -chdir="$dir" test
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.55.1
+
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tflint --init --config="$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config="$GITHUB_WORKSPACE/.tflint.hcl" --minimum-failure-severity=warning
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: checkov (security scan)
+        run: |
+          pip install --quiet "checkov==${CHECKOV_VERSION}"
+          checkov -d . --framework terraform --skip-path '.terraform' --compact --quiet

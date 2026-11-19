@@ -1,0 +1,91 @@
+# terraform fmt, validate and test output
+# Captured 2026-11-19T08:34Z with Terraform v1.17.0. No AWS account involved.
+
+terraform fmt -check -recursive
+== validate modules/hub-spoke-vpc
+Success! The configuration is valid.
+
+== validate modules/transit-gateway
+Success! The configuration is valid.
+
+== validate modules/tgw-routing
+Success! The configuration is valid.
+
+== validate modules/vpc-endpoints
+Success! The configuration is valid.
+
+== validate modules/private-dns
+Success! The configuration is valid.
+
+== validate modules/probe-instance
+Success! The configuration is valid.
+
+== validate envs/lab
+Success! The configuration is valid.
+
+== test modules/hub-spoke-vpc
+tests/vpc.tftest.hcl... in progress
+  run "spoke_has_no_internet_gateway_and_no_nat"... pass
+  run "hub_has_internet_and_one_shared_nat"... pass
+  run "hub_can_have_a_nat_per_zone"... pass
+  run "attachment_does_not_join_a_route_table_on_its_own"... pass
+  run "rejects_workload_subnets_that_do_not_match_the_zones"... pass
+  run "rejects_a_single_zone"... pass
+tests/vpc.tftest.hcl... tearing down
+tests/vpc.tftest.hcl... pass
+
+Success! 6 passed, 0 failed.
+== test modules/transit-gateway
+tests/tgw.tftest.hcl... in progress
+  run "nothing_connects_by_default"... pass
+tests/tgw.tftest.hcl... tearing down
+tests/tgw.tftest.hcl... pass
+
+Success! 1 passed, 0 failed.
+== test modules/tgw-routing
+tests/routing.tftest.hcl... in progress
+  run "spokes_are_isolated_by_default"... pass
+  run "every_spoke_defaults_to_the_hub"... pass
+  run "the_hub_learns_every_spoke"... pass
+  run "an_allowed_pair_learns_each_other_both_ways"... pass
+  run "rejects_an_unknown_spoke_name"... pass
+  run "rejects_a_flow_that_is_not_a_pair"... pass
+tests/routing.tftest.hcl... tearing down
+tests/routing.tftest.hcl... pass
+
+Success! 6 passed, 0 failed.
+== test modules/vpc-endpoints
+tests/endpoints.tftest.hcl... in progress
+  run "only_the_free_s3_endpoint_by_default"... pass
+  run "session_manager_endpoints_when_enabled"... pass
+tests/endpoints.tftest.hcl... tearing down
+tests/endpoints.tftest.hcl... pass
+
+Success! 2 passed, 0 failed.
+== test modules/private-dns
+tests/dns.tftest.hcl... in progress
+  run "zone_is_shared_with_every_vpc"... pass
+  run "records_live_under_the_zone"... pass
+tests/dns.tftest.hcl... tearing down
+tests/dns.tftest.hcl... pass
+
+Success! 2 passed, 0 failed.
+== test modules/probe-instance
+tests/probe.tftest.hcl... in progress
+  run "instance_is_private_and_uses_imds_v2"... pass
+  run "one_rule_per_allowed_range"... pass
+tests/probe.tftest.hcl... tearing down
+tests/probe.tftest.hcl... pass
+
+Success! 2 passed, 0 failed.
+== test envs/lab
+tests/wiring.tftest.hcl... in progress
+  run "default_lab_plans"... pass
+  run "app_and_data_are_connected_by_default"... pass
+  run "emptying_allowed_flows_isolates_the_spokes"... pass
+  run "a_third_spoke_joins_without_touching_the_others"... pass
+  run "needs_exactly_two_zones"... pass
+tests/wiring.tftest.hcl... tearing down
+tests/wiring.tftest.hcl... pass
+
+Success! 5 passed, 0 failed.

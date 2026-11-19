@@ -1,0 +1,14 @@
+# checkov 3.4.3 summary
+# Captured 2026-11-19T08:35Z. Skipped checks and reasons are in the code next to each resource.
+
+terraform scan results:
+
+Passed checks: 327, Failed checks: 0, Skipped checks: 13
+
+
+## Skips (check id : reason)
+CKV2_AWS_23:Records point at private addresses passed in from the instances in another module; the scanner cannot see that link.
+CKV_AWS_158:Log group uses the default AWS-managed encryption. A customer-managed KMS key costs about $1 a month; listed in README as a next step.
+CKV_AWS_231:Return traffic arrives on ephemeral ports (1024-65535). The range is a stateless-ACL necessity and 3389 inside it is not open to new connections: security groups decide that.
+CKV_AWS_231:Return traffic arrives on ephemeral ports (1024-65535). The range is a stateless-ACL necessity and 3389 inside it is not open to new connections: security groups decide that.
+CKV_AWS_352:ICMP has no ports. Only echo request (ping) is allowed, and only from the internal ranges, for troubleshooting.

@@ -12,11 +12,12 @@ code so the answer to "can A reach B?" comes from AWS, not from guessing.
 It is the networking companion to [`aws-sre-platform-terraform`](https://github.com/dineshravichandiran/aws-sre-platform-terraform),
 which covers the platform, the pipeline and the SLOs.
 
-> **Status: validated and tested, not yet applied to a real AWS account.**
-> The checks in the table below ran in CI or locally. The first real `terraform apply` has not
-> happened yet, so there are no Reachability Analyzer results or screenshots in this repository.
-> [`docs/RUNBOOK.md`](docs/RUNBOOK.md) is the exact procedure. This table is updated only when a
-> step has really been done.
+> **Status: applied once to a real AWS account (2026-11-20), drilled, and destroyed.**
+> The first real run found three problems that the offline checks could not see (ping blocked by the network
+> ACL, spokes that were not isolated because traffic hairpinned through the hub NAT, and a destroy that failed on
+> Analyzer paths that still had analyses). The first two are fixed in code and re-verified live; the third is a
+> runbook step. The full log is in [`docs/evidence/real-apply-2026-11-20.txt`](docs/evidence/real-apply-2026-11-20.txt).
+> [`docs/RUNBOOK.md`](docs/RUNBOOK.md) is the procedure. Steps 5 and 6 of it were not run.
 
 ## What has been checked
 
@@ -26,10 +27,12 @@ which covers the platform, the pipeline and the SLOs.
 | Unit and wiring tests | 24 tests pass | `terraform test` against a **mocked** AWS provider (no account, no cost) |
 | Security scan | 327 checks pass, 0 fail, 13 skipped with a written reason each | checkov, every push |
 | Lint | tflint with the Terraform and AWS rule sets | CI, every push |
-| `terraform apply` on a real account | not done yet | needs the runbook |
-| Reachability Analyzer: app to data, data to app, each spoke to the internet | not done yet | same |
-| Isolation drill (spokes cut off from each other) | not done yet | same |
-| `terraform destroy` and a clean bill | not done yet | same |
+| `terraform apply` on a real account | done 2026-11-20: 125 resources in about 4 minutes | CloudShell, local state |
+| Reachability Analyzer: app to data, data to app, each spoke to the internet | done: all four reachable | `scripts/drill.sh analyze` |
+| Real requests from the probes: private DNS, spoke to spoke, internet through one NAT address | done; ping failed first (network ACL), fixed and re-run | SSM Run Command, `scripts/drill.sh prove` |
+| Isolation drill (spokes cut off from each other) | done after a fix: the first attempt showed the spokes still reachable through the hub NAT | analyzer: `TGW_RTB_NO_ROUTE_TO_TGW_ATTACHMENT`; curl timed out |
+| `terraform destroy` and a clean bill | done: the first destroy failed on Analyzer paths that still had analyses; after deleting them it destroyed 102 resources and a region sweep was empty | region sweep, see evidence |
+| Network ACL deny drill, flow log REJECT line | not done | runbook steps 5 and 6 |
 
 The mocked tests prove the routing logic and the wiring: which route tables exist, which
 attachment learns which route, that spokes have no NAT or internet gateway. They do not prove that
@@ -64,8 +67,14 @@ that route is more specific than the default, so the packet goes to the data att
 
 **Isolation.** The only reason app can reach data is the pair `["app", "data"]` in
 `allowed_flows`. Set it to `[]` and neither spoke learns the other's range. A packet for the other
-spoke then follows the default route to the hub, where nothing sends private ranges onward, so it
-goes nowhere. That is the intended result, and it has to be confirmed with the analyzer.
+spoke then matches the **blackhole route for the private supernet** (`10.0.0.0/8`) in the spoke's own
+table and is dropped. Longest-prefix match keeps the hub's /16 and an allowed spoke's /16 working.
+
+> The blackhole was added after the first real isolation drill. Without it, the packet followed the default
+> route to the hub, the hub NAT gateway sent it back to the Transit Gateway through the hub's private-range
+> return route, and the other spoke answered, even though neither spoke had learned the other's range. The
+> earlier text here said such a packet "goes nowhere"; that was a guess and it was wrong. Confirmed after
+> the fix by the analyzer (`reachable: false`) and by a request that timed out.
 
 | Transit Gateway route table | Attachment | Routes |
 |---|---|---|
@@ -124,7 +133,8 @@ You need Terraform 1.10 or newer and `checkov` (`pip install checkov`).
 
 ## What I would do next
 
-- Run it, and record the analyzer results for the connected and the isolated case.
+- Run the two drills that were skipped (network ACL deny rule found with the analyzer, flow log REJECT line).
+- Pin the probe AMI: the "latest" SSM parameter makes a later plan want to replace the probe instances.
 - A firewall in the hub (Network Firewall or a gateway load balancer) with appliance mode on the
   hub attachment, so spoke-to-spoke and egress traffic is inspected.
 - A Route 53 Resolver for names shared with an on-premises network.

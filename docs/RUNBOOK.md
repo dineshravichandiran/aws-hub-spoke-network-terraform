@@ -24,6 +24,8 @@ State is local (`envs/lab/terraform.tfstate`, not committed). **Screenshot** the
 
 ## 2. Prove it works
 
+`scripts/drill.sh prove` runs these checks through SSM Run Command (no Session Manager plugin needed) and `scripts/drill.sh analyze` runs every analyzer path in step 3. The commands below are the manual version.
+
 Take the instance IDs from `terraform output probe_instance_ids`.
 
 ```bash
@@ -91,7 +93,13 @@ CloudWatch Logs, log group `/vpc/hub-spoke-lab-data/flow-logs`. During drill 4 y
 
 ## 7. Destroy the same day
 
+Reachability Analyzer paths cannot be deleted while they still have analyses (the first real destroy failed
+with `DeleteNetworkInsightsPath ... StatusCode: 400`). Delete the analyses first:
+
 ```bash
+for a in $(aws ec2 describe-network-insights-analyses --query 'NetworkInsightsAnalyses[].NetworkInsightsAnalysisId' --output text); do
+  aws ec2 delete-network-insights-analysis --network-insights-analysis-id "$a"
+done
 cd envs/lab
 terraform destroy
 ```

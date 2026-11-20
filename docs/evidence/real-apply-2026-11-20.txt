@@ -1,0 +1,81 @@
+aws-hub-spoke-network-terraform: real apply, drills and destroy
+Date: 2026-11-20 (UTC times). Region ap-south-1. Account ID redacted.
+Run from AWS CloudShell with Terraform 1.12.2 and local state. Probe checks used SSM Run Command
+(scripts/drill.sh), Reachability Analyzer used the paths defined in envs/lab.
+
+== 1. apply (original code, commit c62b7de + scripts/drill.sh) ==
+10:41:57Z  plan: 125 to add; apply started
+10:45Z     "Apply complete! Resources: 125 added, 0 changed, 0 destroyed." (about 4 minutes)
+
+== 2. Reachability Analyzer, defaults (allowed_flows = [["app","data"]]) ==
+app-to-data      reachable: true
+data-to-app      reachable: true
+app to internet  reachable: true
+data to internet reachable: true
+
+== 3. Real requests from the probes (10:47Z) ==
+app probe:  getent hosts data.corp.internal -> 10.2.0.121
+            curl http://data.corp.internal:8080 -> "hello from hub-spoke-lab-data-probe"
+            curl -I https://example.com -> HTTP/2 200
+            ping data probe: 3 sent, 0 received, 100% packet loss      <-- FINDING 1
+egress address seen from the app probe and from the data probe: the same address, and it equals the
+hub NAT gateway's Elastic IP (central egress confirmed).
+
+== FINDING 1: ping failed although TCP 8080 worked ==
+Cause: the workload network ACL allowed inbound ICMP echo request (type 8) but nothing allowed the echo
+REPLY (type 0). The ACL is stateless and the TCP/UDP return rules do not cover ICMP. The analyzer path is
+TCP 8080, so it could not show this.
+Fix: aws_network_acl_rule.in_icmp_reply_from_allowed (commit 37a347c).
+Applied live (2 rules added, targeted apply). Re-check at 10:55Z: ping 3 sent, 3 received, 0% loss.
+
+== 4. Isolation drill, first attempt (-var allowed_flows=[], 10:55Z) ==
+spokes_that_learn_each_other = []   (the spokes learned nothing from each other)
+Analyzer app-to-data: reachable: true      <-- FINDING 2
+Real requests at 10:57Z: DNS resolves, curl to data:8080 still answered, ping 0% loss.
+So the spokes were NOT isolated, although the code said they should be.
+
+== FINDING 2: spoke-to-spoke hairpin through the hub NAT gateway ==
+With no route to the other spoke, a packet followed the spoke's default route to the hub attachment. The hub
+attachment subnet's default route goes to the NAT gateway. The NAT gateway sits in the public subnet, whose route
+table sends 10.0.0.0/8 to the Transit Gateway (needed for return traffic of internet flows). The NAT gateway
+forwarded the packet to the Transit Gateway, the hub table had learned both spokes, and the other spoke answered.
+The earlier README and notes said such a packet "goes nowhere". That was written before any real test and was wrong.
+Fix: a static blackhole route for the private supernet (10.0.0.0/8) in each spoke Transit Gateway route table
+(aws_ec2_transit_gateway_route.spoke_private_blackhole, commit 34978b7). Longest-prefix match keeps every
+propagated /16 (the hub, and an allowed spoke) working, while a disallowed spoke range now matches the blackhole.
+Mocked tests: 8 passed, 0 failed (2 new). terraform fmt -check: passed.
+
+== 5. Isolation drill, after the fix (allowed_flows = [], 11:00Z) ==
+Analyzer app-to-data:  reachable: false   explanation: TGW_RTB_NO_ROUTE_TO_TGW_ATTACHMENT
+Analyzer data-to-app:  reachable: false   explanation: TGW_RTB_NO_ROUTE_TO_TGW_ATTACHMENT
+Analyzer app to internet / data to internet: reachable: true
+Real requests at 11:02Z: data.corp.internal still resolves to 10.2.0.121; curl to :8080 returned nothing
+(timeout); ping 3 sent, 0 received; internet still works with the same NAT address.
+(DNS answering is not the same as being allowed to connect.)
+
+== 6. Flow restored (allowed_flows back to the default, 11:03Z) ==
+Real requests: curl answered, ping 3/3 received, 0% loss, internet works.
+Analyzer: all four paths reachable: true.
+
+== 7. destroy ==
+11:05:28Z  terraform destroy started
+First attempt failed: "DeleteNetworkInsightsPath ... StatusCode: 400" for all four paths. AWS refuses to delete a path
+that still has analyses (16 had accumulated from the drills).       <-- FINDING 3
+Fix by hand: aws ec2 delete-network-insights-analysis for each analysis, then destroy again.
+11:10Z     destroy retried (analyses deleted first)
+11:17:20Z  "Destroy complete! Resources: 102 destroyed." (the transit gateway itself took about 2 minutes)
+
+== leftover check after destroy (11:17Z, ap-south-1) ==
+Transit gateways: none | TGW attachments: none | NAT gateways: none | Elastic IPs: none | EC2 instances: none
+VPC endpoints: none | non-default VPCs: none | Route 53 hosted zones: none | Reachability Analyzer paths: none
+CloudWatch log groups /vpc*: none | IAM roles containing hub-spoke: none
+
+== Not done / caveats ==
+- Runbook step 5 (deny rule on the data spoke ACL, find it with the analyzer) was not run.
+- Runbook step 6 (flow logs: look at a REJECT line) was not run.
+- Interface endpoints (enable_interface_endpoints) were left off; Session Manager and SSM Run Command went over the NAT path.
+- Only the targeted changes above were applied after the first apply. A full plan at that point also wanted to
+  replace both probe instances and the four analyzer paths, because the probes read the "latest" Amazon Linux AMI
+  from an SSM parameter and the value was unknown at plan time. I did not chase that further: it is a plan
+  that would change the probes whenever AWS publishes a new AMI, and is worth pinning if this lab is kept.
+- Cost was not measured. Check Cost Explorer (grouped by the Project tag) before quoting any figure.

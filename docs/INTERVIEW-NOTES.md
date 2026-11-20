@@ -11,9 +11,12 @@ default route goes to the Transit Gateway and on to the hub. I turned off the Tr
 default route tables so nothing is connected by accident, and gave each spoke its own table. App
 and data can reach each other only because one variable lists that pair. A private Route53 zone is
 shared by all three VPCs, and I defined Reachability Analyzer paths in code. It is validated and
-tested with a mocked provider and scanned with checkov. [Until applied: I have not run it on a live
-account yet.] [Once applied: I applied it, confirmed with the analyzer, cut the spokes off from
-each other and watched the analyzer explain why, then destroyed it.]"
+tested with a mocked provider and scanned with checkov. Then I applied it once to a real account. That
+found two bugs the mocked tests could not: ping was blocked because the stateless network ACL had no rule
+for the echo reply, and the spokes were not really isolated, because a packet for a disallowed spoke went
+to the hub and the hub NAT gateway hairpinned it back. I fixed both (an ACL rule, and a blackhole route for the
+private supernet in each spoke table), re-ran the drills, and the analyzer then reported the spokes
+unreachable. Then I destroyed it."
 
 ## Transit Gateway and routing
 
@@ -34,9 +37,11 @@ propagates into, one shared table, so everything can reach everything. That is t
 segmentation. With the defaults off, an attachment joins a table only when the code says so.
 
 **How is isolation between spokes done?** One route table per spoke. Spoke A's table only learns
-spoke B's range if the pair is listed in `allowed_flows`. If it is not learned, the only route
-that matches is the default to the hub, where nothing carries private ranges onward, so the
-packet goes nowhere. Isolation comes from the missing route, not from a rule that blocks.
+spoke B's range if the pair is listed in `allowed_flows`. If it is not learned, the packet must not
+fall through to the default route to the hub: the hub NAT gateway would send it back into the Transit
+Gateway and the other spoke would answer (I saw exactly that in the first real drill). So each spoke
+table also has a blackhole route for the private supernet; longest-prefix match keeps the /16 routes
+that are allowed working and drops the rest.
 
 **A bug the design avoids: the return path.** Outbound traffic from a spoke goes spoke, Transit
 Gateway, hub attachment subnet, NAT, internet gateway. The reply comes back to the NAT gateway,
@@ -86,7 +91,7 @@ the name still resolves while the connection times out, which is a good way to s
 configuration logic (which routes exist, which attachment learns which). Reachability Analyzer asks
 AWS whether a path exists by reading the real configuration, without sending traffic, and names
 the component that blocks it. Real requests from the probe instances confirm the packets flow.
-[Until applied: only the first level has been done.]
+All three levels were done on 2026-11-20, and the real requests caught what the first two did not (ping and the hairpin).
 
 **What would you check first if app cannot reach data?** Name resolves? Then the route on the
 source subnet, then the source's Transit Gateway table for the destination range, then the

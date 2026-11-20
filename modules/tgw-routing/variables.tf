@@ -36,6 +36,12 @@ variable "allowed_flows" {
   }
 }
 
+variable "private_summary_cidr" {
+  description = "The private supernet that contains every VPC range, for example 10.0.0.0/8. When set, each spoke route table gets a blackhole route for it. A spoke range that was not propagated then matches this blackhole (longest prefix) instead of the 0.0.0.0/0 route to the hub, so a packet for a spoke that is not allowed is dropped. Without it, such a packet goes to the hub and the hub NAT gateway sends it back to the other spoke."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Extra tags added to every resource."
   type        = map(string)

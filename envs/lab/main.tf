@@ -70,6 +70,9 @@ module "routing" {
   hub_attachment_id  = module.hub.attachment_id
   spokes             = { for k, m in module.spoke : k => { attachment_id = m.attachment_id } }
   allowed_flows      = var.allowed_flows
+
+  # Blackhole the private supernet in every spoke table so a spoke that is not allowed cannot hairpin through the hub NAT.
+  private_summary_cidr = var.supernet
 }
 
 module "endpoints" {

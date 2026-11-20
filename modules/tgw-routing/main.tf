@@ -57,6 +57,17 @@ resource "aws_ec2_transit_gateway_route" "spoke_default" {
 }
 
 # The hub's own range, learned from its attachment.
+# Closes a hairpin found in the first real apply: with no route to another spoke, traffic for it followed the
+# default route to the hub, the hub NAT gateway forwarded it to the Transit Gateway via the hub's private-range
+# return route, and the other spoke answered. Longest-prefix match keeps every propagated /16 working.
+resource "aws_ec2_transit_gateway_route" "spoke_private_blackhole" {
+  for_each = var.private_summary_cidr == null ? {} : var.spokes
+
+  destination_cidr_block         = var.private_summary_cidr
+  blackhole                      = true
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke[each.key].id
+}
+
 resource "aws_ec2_transit_gateway_route_table_propagation" "spoke_learns_hub" {
   for_each = var.spokes
 

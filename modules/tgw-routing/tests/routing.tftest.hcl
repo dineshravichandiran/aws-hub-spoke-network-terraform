@@ -84,3 +84,30 @@ run "rejects_a_flow_that_is_not_a_pair" {
 
   expect_failures = [var.allowed_flows]
 }
+
+run "no_blackhole_unless_a_summary_range_is_given" {
+  command = plan
+
+  assert {
+    condition     = length(aws_ec2_transit_gateway_route.spoke_private_blackhole) == 0
+    error_message = "Without private_summary_cidr there is no blackhole route."
+  }
+}
+
+run "each_spoke_blackholes_the_private_supernet" {
+  command = plan
+
+  variables {
+    private_summary_cidr = "10.0.0.0/8"
+  }
+
+  assert {
+    condition     = length(aws_ec2_transit_gateway_route.spoke_private_blackhole) == 2
+    error_message = "Each spoke table needs a blackhole for the private supernet."
+  }
+
+  assert {
+    condition     = alltrue([for r in aws_ec2_transit_gateway_route.spoke_private_blackhole : r.blackhole && r.destination_cidr_block == "10.0.0.0/8"])
+    error_message = "The route must be a blackhole for the supernet."
+  }
+}

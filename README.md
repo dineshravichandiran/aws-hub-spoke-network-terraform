@@ -17,7 +17,8 @@ which covers the platform, the pipeline and the SLOs.
 > ACL, spokes that were not isolated because traffic hairpinned through the hub NAT, and a destroy that failed on
 > Analyzer paths that still had analyses). The first two are fixed in code and re-verified live; the third is a
 > runbook step. The full log is in [`docs/evidence/real-apply-2026-11-20.txt`](docs/evidence/real-apply-2026-11-20.txt).
-> [`docs/RUNBOOK.md`](docs/RUNBOOK.md) is the procedure. Steps 5 and 6 of it were not run.
+> [`docs/RUNBOOK.md`](docs/RUNBOOK.md) is the procedure. Steps 5 and 6 were run in a second apply the same day
+> (the network ACL deny blocked the request and left a flow log REJECT line; the analyzer did not name the ACL rule, see the table).
 
 ## What has been checked
 
@@ -32,7 +33,9 @@ which covers the platform, the pipeline and the SLOs.
 | Real requests from the probes: private DNS, spoke to spoke, internet through one NAT address | done; ping failed first (network ACL), fixed and re-run | SSM Run Command, `scripts/drill.sh prove` |
 | Isolation drill (spokes cut off from each other) | done after a fix: the first attempt showed the spokes still reachable through the hub NAT | analyzer: `TGW_RTB_NO_ROUTE_TO_TGW_ATTACHMENT`; curl timed out |
 | `terraform destroy` and a clean bill | done: the first destroy failed on Analyzer paths that still had analyses; after deleting them it destroyed 102 resources and a region sweep was empty | region sweep, see evidence |
-| Network ACL deny drill, flow log REJECT line | not done | runbook steps 5 and 6 |
+| Network ACL deny drill (runbook step 5) | done in a second apply: the request timed out with the rule in place and worked again after; the analyzer flipped to not reachable but gave `ENI_SOURCE_DEST_CHECK_RESTRICTION`, **not** the ACL rule, and I did not find out why | `scripts/drill.sh nacl` |
+| Flow log REJECT line (runbook step 6) | done: one TCP/8080 REJECT record from the app probe to the data probe, 5 packets, inside the drill window | `scripts/drill.sh flowlogs`, plus a pattern on port 8080 |
+| Second destroy and clean bill | done: 129 destroyed, region sweep empty | region sweep, see evidence |
 
 The mocked tests prove the routing logic and the wiring: which route tables exist, which
 attachment learns which route, that spokes have no NAT or internet gateway. They do not prove that
@@ -133,7 +136,8 @@ You need Terraform 1.10 or newer and `checkov` (`pip install checkov`).
 
 ## What I would do next
 
-- Run the two drills that were skipped (network ACL deny rule found with the analyzer, flow log REJECT line).
+- Find out why the analyzer gave `ENI_SOURCE_DEST_CHECK_RESTRICTION` instead of the ACL rule when the deny rule was added, and whether the other paths behave the same.
+- Look at the UDP 123 REJECT lines in the data flow log (NTP replies blocked by the workload network ACL).
 - Pin the probe AMI: the "latest" SSM parameter makes a later plan want to replace the probe instances.
 - A firewall in the hub (Network Firewall or a gateway load balancer) with appliance mode on the
   hub attachment, so spoke-to-spoke and egress traffic is inspected.

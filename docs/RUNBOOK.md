@@ -83,13 +83,17 @@ Restore `allowed_flows = [["app", "data"]]` afterwards if you want to repeat ste
 
 In the console, add a **deny** inbound rule (rule number 50, TCP 8080, source `10.1.0.0/16`) to the
 data spoke's workload network ACL. Run the app-to-data analysis again. Expected: not reachable, and
-the explanation names the network ACL rule. Delete the rule afterwards. Write down how long it took
+the explanation names the network ACL rule. (In the real run the analyzer did flip to not reachable but returned
+`ENI_SOURCE_DEST_CHECK_RESTRICTION` with no rule named, so check the real request too: `curl --max-time 5` timed out
+while the rule existed.) Delete the rule afterwards. `scripts/drill.sh nacl` does all of this. Write down how long it took
 to find the cause with the analyzer and how long it would take by hand.
 
 ## 6. Look at the flow logs
 
 CloudWatch Logs, log group `/vpc/hub-spoke-lab-data/flow-logs`. During drill 4 you should see
-`REJECT` or no accepted entries for the app address. Note one line that shows a drop.
+`REJECT` or no accepted entries for the app address. Note one line that shows a drop. The record needs several minutes to appear. Filter on the port so unrelated
+rejects (UDP 123 NTP replies showed up too) do not hide it: `scripts/drill.sh flowlogs`, or
+`--filter-pattern '[v, a, e, s, d, sp, dp=8080, p, pk, b, st, en, act=REJECT, ls]'`.
 
 ## 7. Destroy the same day
 

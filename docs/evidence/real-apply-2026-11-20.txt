@@ -70,9 +70,41 @@ Transit gateways: none | TGW attachments: none | NAT gateways: none | Elastic IP
 VPC endpoints: none | non-default VPCs: none | Route 53 hosted zones: none | Reachability Analyzer paths: none
 CloudWatch log groups /vpc*: none | IAM roles containing hub-spoke: none
 
+== 8. second apply the same day: runbook steps 5 and 6 (network ACL deny, flow log REJECT) ==
+Done after the first destroy, because I had skipped these two steps the first time. Same code as the end of section 7
+(commits 37a347c and 34978b7 are in), fresh state.
+11:27Z  terraform apply started
+11:32Z  "Apply complete! Resources: 129 added, 0 changed, 0 destroyed." (125 + 2 ICMP reply rules + 2 blackhole routes)
+11:32Z  baseline (scripts/drill.sh prove): private name data.corp.internal -> 10.2.0.48, ping 3/3 received, 0% loss,
+        HTTP 200, both spokes leave through the same hub NAT address. The ping fix from section 3 holds on a fresh apply.
+11:33:11Z  step 5: added inbound DENY rule 50, TCP 8080, source 10.1.0.0/16 on the data spoke workload network ACL
+        - real request from the app probe to http://data.corp.internal:8080: curl exit 28 (timed out)
+        - Reachability Analyzer app-to-data, run 27 seconds after adding the rule: reachable false (it was true at baseline),
+          BUT the explanation code was ENI_SOURCE_DEST_CHECK_RESTRICTION with no ACL and no aclRule in it.
+          The analyzer did NOT name the network ACL rule. So the runbook's expected result ("the explanation names the
+          network ACL rule") did not happen. I have not worked out why. What I can say: the real request failed
+          while the rule existed, the analyzer flipped from reachable to not reachable, and both went back after the
+          rule was deleted. What I cannot say: that the analyzer pointed at the cause.
+11:33:49Z  deleted rule 50; the same request returned "hello from hub-spoke-lab-data-probe", curl exit 0.
+step 6: flow logs, log group /vpc/hub-spoke-lab-data/flow-logs (queried at 11:37 to 11:38Z, about 4 minutes after the drill)
+        filter [v, a, e, s, d, sp, dp=8080, p, pk, b, st, en, act=REJECT, ls] returned one record:
+        2 <account> eni-06105cd4a876616b9 10.1.0.38 10.2.0.48 36228 8080 6 5 300 1795174405 1795174426 REJECT OK
+        = TCP, app probe 10.1.0.38 -> data probe 10.2.0.48 port 8080, 5 packets, 300 bytes, REJECT,
+        window 11:33:25Z to 11:33:46Z. That is the dropped request from the drill.
+        Also seen in the same log, unrelated to the drill: several REJECT lines for UDP, source port 123, from public IPs to the
+        data probe (replies to NTP queries from the instance, rejected inbound by the workload network ACL).
+        I did not investigate them or change anything for them.
+Cleanup  deleted the 5 analyses (4 baseline + 1 from the drill) so the paths could be destroyed.
+about 11:38Z  terraform destroy started (start time not logged); 11:44Z "Destroy complete! Resources: 129 destroyed." Transit gateways report deleted.
+
+== leftover check after the second destroy (11:43 to 11:44Z, ap-south-1) ==
+VPCs tagged for the lab: 0 | transit gateways not deleted: 0 | NAT gateways: 0 | Elastic IPs: 0 | EC2 instances: 0
+Reachability Analyzer paths: 0 | Route 53 hosted zones: 0 | log groups /vpc/hub-spoke*: 0 | terraform state entries: 0
+
 == Not done / caveats ==
-- Runbook step 5 (deny rule on the data spoke ACL, find it with the analyzer) was not run.
-- Runbook step 6 (flow logs: look at a REJECT line) was not run.
+- Runbook steps 5 and 6 were run in a second apply (section 8). Step 5 only half worked: the deny rule really blocked
+  traffic, but the analyzer's explanation did not name the network ACL rule. I did not time "analyzer vs by hand".
+- Only one analyzer path (app-to-data) was checked with the deny rule in place.
 - Interface endpoints (enable_interface_endpoints) were left off; Session Manager and SSM Run Command went over the NAT path.
 - Only the targeted changes above were applied after the first apply. A full plan at that point also wanted to
   replace both probe instances and the four analyzer paths, because the probes read the "latest" Amazon Linux AMI

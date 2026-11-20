@@ -3,6 +3,8 @@
 # It uses SSM Run Command (no Session Manager plugin needed) and Reachability Analyzer.
 #   scripts/drill.sh prove     # name resolution, spoke to spoke, internet through the hub NAT
 #   scripts/drill.sh analyze   # run every Reachability Analyzer path and print the result
+#   scripts/drill.sh nacl      # runbook step 5: deny TCP 8080 from the app range in the data spoke ACL, ask the analyzer, restore
+#   scripts/drill.sh flowlogs  # runbook step 6: show REJECT lines from the data spoke flow logs
 set -uo pipefail
 cd "$(dirname "$0")/../envs/lab"
 
@@ -28,10 +30,11 @@ ssm_run() { # <instance id> <shell command>
     --query '[StandardOutputContent,StandardErrorContent]' --output text | sed 's/^/  | /'
 }
 
-analyze_all() {
+analyze_all() { # optional $1: only paths whose name contains this text
   for out in spoke_to_spoke_path_ids spoke_to_internet_path_ids; do
     terraform output -json "$out" | python3 -c 'import json,sys; [print(k, v) for k, v in json.load(sys.stdin).items()]' |
     while read -r name pid; do
+      case "$name" in *"${1:-}"*) ;; *) continue ;; esac
       id=$(aws ec2 start-network-insights-analysis --network-insights-path-id "$pid" \
            --query NetworkInsightsAnalysis.NetworkInsightsAnalysisId --output text)
       for _ in $(seq 1 40); do
@@ -42,7 +45,7 @@ analyze_all() {
       done
       echo "== $out / $name"
       aws ec2 describe-network-insights-analyses --network-insights-analysis-ids "$id" \
-        --query 'NetworkInsightsAnalyses[0].{status:Status,reachable:NetworkPathFound,why:Explanations[].ExplanationCode,msg:StatusMessage}' --output json
+        --query 'NetworkInsightsAnalyses[0].{status:Status,reachable:NetworkPathFound,why:Explanations[].ExplanationCode,aclRule:Explanations[].NetworkAclRule,msg:StatusMessage}' --output json
     done
   done
 }
@@ -61,5 +64,32 @@ case "${1:-}" in
     date -u +%FT%TZ
     analyze_all
     ;;
-  *) echo "usage: $0 prove|analyze"; exit 2 ;;
+  nacl)
+    NACL=$(aws ec2 describe-network-acls --filters Name=tag:Name,Values=hub-spoke-lab-data-workload \
+           --query 'NetworkAcls[0].NetworkAclId' --output text)
+    echo "data spoke workload ACL: $NACL"
+    echo "## before: app to data on 8080"
+    ssm_run "$APP" "curl -s --max-time 5 http://data.corp.internal:8080; echo curl-exit=\$?"
+    T0=$(date +%s); date -u +%FT%TZ
+    echo "## adding deny rule 50: TCP 8080 from 10.1.0.0/16"
+    aws ec2 create-network-acl-entry --network-acl-id "$NACL" --ingress --rule-number 50 --protocol tcp \
+      --port-range From=8080,To=8080 --cidr-block 10.1.0.0/16 --rule-action deny
+    echo "## analyzer: app-to-data"
+    analyze_all app-to-data
+    echo "seconds from adding the rule to the analyzer naming it: $(( $(date +%s) - T0 ))"
+    echo "## real request while the rule exists"
+    ssm_run "$APP" "curl -s --max-time 5 http://data.corp.internal:8080; echo curl-exit=\$?"
+    echo "## (flow logs: run '$0 flowlogs' in a few minutes)"
+    echo "## removing the rule"
+    aws ec2 delete-network-acl-entry --network-acl-id "$NACL" --ingress --rule-number 50
+    date -u +%FT%TZ
+    sleep 5
+    ssm_run "$APP" "curl -s --max-time 5 http://data.corp.internal:8080; echo curl-exit=\$?"
+    ;;
+  flowlogs)
+    START=$(( ($(date +%s) - ${2:-1800}) * 1000 ))
+    aws logs filter-log-events --log-group-name /vpc/hub-spoke-lab-data/flow-logs --filter-pattern REJECT \
+      --start-time "$START" --max-items 8 --query 'events[].message' --output text | tr '\t' '\n'
+    ;;
+  *) echo "usage: $0 prove|analyze|nacl|flowlogs"; exit 2 ;;
 esac

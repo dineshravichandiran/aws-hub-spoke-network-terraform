@@ -248,7 +248,24 @@ resource "aws_network_acl_rule" "in_icmp_from_allowed" {
   protocol       = "icmp"
   rule_action    = "allow"
   cidr_block     = var.workload_inbound_cidrs[count.index]
-  icmp_type      = 8 # echo request: ping. Replies (type 0) come back through the stateless rules below.
+  icmp_type      = 8 # echo request: ping
+  icmp_code      = -1
+}
+
+# The TCP and UDP return rules below do not cover ICMP, and the ACL is stateless, so the echo REPLY
+# (type 0) needs its own inbound rule. The first real apply showed 100% packet loss on ping between the
+# spokes until this existed, although the Reachability Analyzer path (TCP 8080) was fine.
+resource "aws_network_acl_rule" "in_icmp_reply_from_allowed" {
+  #checkov:skip=CKV_AWS_352:ICMP has no ports. Only echo reply (type 0) is allowed, and only from the internal ranges.
+  count = local.has_workers ? length(var.workload_inbound_cidrs) : 0
+
+  network_acl_id = aws_network_acl.workload[0].id
+  rule_number    = 600 + count.index
+  egress         = false
+  protocol       = "icmp"
+  rule_action    = "allow"
+  cidr_block     = var.workload_inbound_cidrs[count.index]
+  icmp_type      = 0 # echo reply
   icmp_code      = -1
 }
 
